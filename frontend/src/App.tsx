@@ -9,9 +9,16 @@ type Event = { id: number; title: string; date: string; end_date?: string | null
 type Row = { student: Student; attendance: { status: 'PRESENT'|'ABSENT' } | null }
 type StudentAttendance = { id: number; date: string; status: 'PRESENT'|'ABSENT'; marked_by_user_id: number }
 
+class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 async function request(path: string, token: string, init: RequestInit = {}) {
   const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...init.headers } })
-  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.detail || 'Something went wrong') }
+  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new ApiError(response.status, data.detail || 'Something went wrong') }
   if (response.status === 204) return null
   return response.json()
 }
@@ -52,7 +59,14 @@ export default function App() {
       const me = await request('/auth/me', t) as User; setUser(me)
       const [o, s, ov, ev, accountList] = await Promise.all([request('/olympiads', t), request('/students?active=true', t), request('/statistics/overview', t), request('/calendar/events', t), me.role === 'GLOBAL_ADMIN' ? request('/users', t) : Promise.resolve([])])
       setOlympiads(o); setStudents(s); setOverview(ov); setEvents(ev); setUsers(accountList)
-    } catch (e: any) { logout(); setError(e.message) }
+    } catch (e: any) {
+      if (e instanceof ApiError && e.status === 401) {
+        logout()
+        setError('Your session expired. Please sign in again.')
+      } else {
+        setError(`Could not load your workspace. Your login is still saved. ${e?.message || ''}`.trim())
+      }
+    }
   }
   useEffect(() => { if (token) loadData(token) }, [token])
   useEffect(() => { if (token && user) loadAttendance() }, [token, user, attDate])
@@ -80,7 +94,8 @@ export default function App() {
   function logout() { localStorage.removeItem('token'); setToken(''); setUser(null) }
   function notify(msg: string) { setToast(msg); window.setTimeout(() => setToast(''), 2800) }
 
-  if (!token || !user) return <Login onLogin={async (username, password) => { setError(''); try { const data: any = await request('/auth/login', '', { method: 'POST', body: JSON.stringify({ username, password }), headers: {} }); localStorage.setItem('token', data.access_token); setToken(data.access_token); setUser(data.user) } catch (e: any) { setError(e.message) } }} error={error} />
+  if (!token) return <Login onLogin={async (username, password) => { setError(''); try { const data: any = await request('/auth/login', '', { method: 'POST', body: JSON.stringify({ username, password }), headers: {} }); localStorage.setItem('token', data.access_token); setToken(data.access_token); setUser(data.user) } catch (e: any) { setError(e.message) } }} error={error} />
+  if (!user) return <div className="login-wrap"><div className="login-card"><div className="eyebrow">YOUR WORKSPACE</div><h1>{error ? 'Could not load your workspace' : 'Loading your workspace…'}</h1><p>{error || 'Checking your saved login. Please wait.'}</p>{error && <><button className="primary login-submit" onClick={()=>{setError('');loadData(token)}}>Try again</button><button className="button-light login-submit" onClick={logout}>Sign in again</button></>}</div></div>
 
   async function saveAttendance() {
     setBusy(true)
