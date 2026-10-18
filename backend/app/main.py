@@ -229,10 +229,15 @@ def student_attendance(student_id: int, user: User = Depends(current_user), db: 
 
 
 @app.get("/minutes", response_model=list[StudentMinutesOut])
-def student_minutes(minutes_date: date | None = Query(default=None, alias="date"), user: User = Depends(current_user), db: Session = Depends(get_db)):
+def student_minutes(minutes_date: date | None = Query(default=None, alias="date"), student_id: int | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
     stmt = select(StudentMinutes).join(Student).order_by(StudentMinutes.date.desc(), Student.full_name)
     if minutes_date:
         stmt = stmt.where(StudentMinutes.date == minutes_date)
+    if student_id:
+        student = db.get(Student, student_id)
+        if not student: raise HTTPException(404, "Student not found")
+        ensure_olympiad_access(db, user, student.olympiad_id)
+        stmt = stmt.where(StudentMinutes.student_id == student_id)
     if user.role == Role.OLYMPIAD_LEAD:
         own = lead_olympiad(db, user)
         if not own: return []
@@ -242,8 +247,6 @@ def student_minutes(minutes_date: date | None = Query(default=None, alias="date"
 
 @app.post("/minutes", response_model=list[StudentMinutesOut])
 def save_student_minutes(body: StudentMinutesBatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    if user.role != Role.OLYMPIAD_LEAD:
-        raise HTTPException(403, "Only Olympiad Leads can record student minutes")
     ids = {entry.student_id for entry in body.entries}
     if len(ids) != len(body.entries): raise HTTPException(422, "Duplicate student in minutes submission")
     students = {student.id: student for student in db.scalars(select(Student).where(Student.id.in_(ids), Student.active.is_(True))).all()} if ids else {}
