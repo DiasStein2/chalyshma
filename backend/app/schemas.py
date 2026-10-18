@@ -95,6 +95,26 @@ class AttendanceOut(ORMModel):
     marked_by_user_id: int
 
 
+class StudentMinutesEntry(BaseModel):
+    student_id: int
+    minutes: int = Field(ge=0, le=1440)
+
+
+class StudentMinutesBatch(BaseModel):
+    date: date
+    entries: list[StudentMinutesEntry]
+
+
+class StudentMinutesOut(ORMModel):
+    id: int
+    student_id: int
+    date: date
+    minutes: int
+    recorded_by_user_id: int
+    student: StudentOut
+    recorded_by: UserOut
+
+
 class EventIn(BaseModel):
     date: date
     end_date: date | None = None

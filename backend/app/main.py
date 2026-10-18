@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models import Attendance, AttendanceStatus, CalendarEvent, Olympiad, Role, Student, User
-from app.schemas import AttendanceBatch, AttendanceOut, AttendanceUpdate, EventIn, EventOut, LoginIn, OlympiadIn, OlympiadOut, StudentIn, StudentOut, TokenOut, UserCreate, UserOut, UserUpdate
+from app.models import Attendance, AttendanceStatus, CalendarEvent, Olympiad, Role, Student, StudentMinutes, User
+from app.schemas import AttendanceBatch, AttendanceOut, AttendanceUpdate, EventIn, EventOut, LoginIn, OlympiadIn, OlympiadOut, StudentIn, StudentOut, StudentMinutesBatch, StudentMinutesOut, TokenOut, UserCreate, UserOut, UserUpdate
 from app.security import create_token, hash_password, token_user_id, verify_password
 from app.services import ensure_olympiad_access, lead_olympiad, olympiad_stats, student_stats
 
@@ -113,7 +113,7 @@ def update_olympiad(olympiad_id: int, body: OlympiadIn, _: User = Depends(admin)
 def delete_olympiad(olympiad_id: int, _: User = Depends(admin), db: Session = Depends(get_db)):
     item = db.get(Olympiad, olympiad_id)
     if not item: raise HTTPException(404, "Olympiad not found")
-    if db.scalar(select(func.count(Student.id)).where(Student.olympiad_id == olympiad_id)): raise HTTPException(409, "Move or deactivate students before deleting this olympiad")
+    if db.scalar(select(func.count(Student.id)).where(Student.olympiad_id == olympiad_id)): raise HTTPException(409, "Move all students, including inactive students, to another direction before deleting this olympiad")
     db.delete(item); safe_commit(db)
 
 
@@ -226,6 +226,42 @@ def student_attendance(student_id: int, user: User = Depends(current_user), db: 
     if not item: raise HTTPException(404, "Student not found")
     ensure_olympiad_access(db, user, item.olympiad_id)
     return db.scalars(select(Attendance).where(Attendance.student_id == student_id).order_by(Attendance.date.desc())).all()
+
+
+@app.get("/minutes", response_model=list[StudentMinutesOut])
+def student_minutes(minutes_date: date | None = Query(default=None, alias="date"), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    stmt = select(StudentMinutes).join(Student).order_by(StudentMinutes.date.desc(), Student.full_name)
+    if minutes_date:
+        stmt = stmt.where(StudentMinutes.date == minutes_date)
+    if user.role == Role.OLYMPIAD_LEAD:
+        own = lead_olympiad(db, user)
+        if not own: return []
+        stmt = stmt.where(Student.olympiad_id == own.id)
+    return db.scalars(stmt).all()
+
+
+@app.post("/minutes", response_model=list[StudentMinutesOut])
+def save_student_minutes(body: StudentMinutesBatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if user.role != Role.OLYMPIAD_LEAD:
+        raise HTTPException(403, "Only Olympiad Leads can record student minutes")
+    ids = {entry.student_id for entry in body.entries}
+    if len(ids) != len(body.entries): raise HTTPException(422, "Duplicate student in minutes submission")
+    students = {student.id: student for student in db.scalars(select(Student).where(Student.id.in_(ids), Student.active.is_(True))).all()} if ids else {}
+    if len(students) != len(ids): raise HTTPException(404, "Active student not found")
+    for student in students.values(): ensure_olympiad_access(db, user, student.olympiad_id)
+    output = []
+    for entry in body.entries:
+        record = db.scalar(select(StudentMinutes).where(StudentMinutes.student_id == entry.student_id, StudentMinutes.date == body.date))
+        if record is None:
+            record = StudentMinutes(student_id=entry.student_id, date=body.date, minutes=entry.minutes, recorded_by_user_id=user.id)
+            db.add(record)
+        else:
+            record.minutes = entry.minutes
+            record.recorded_by_user_id = user.id
+        output.append(record)
+    safe_commit(db)
+    for record in output: db.refresh(record)
+    return output
 
 
 @app.get("/statistics/students/{student_id}")

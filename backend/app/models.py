@@ -76,6 +76,20 @@ class Attendance(Base):
     student: Mapped[Student] = relationship(back_populates="attendance")
 
 
+class StudentMinutes(Base):
+    __tablename__ = "student_minutes"
+    __table_args__ = (UniqueConstraint("student_id", "date", name="uq_student_minutes_student_date"), CheckConstraint("minutes >= 0", name="ck_student_minutes_nonnegative"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("students.id", ondelete="RESTRICT"), index=True)
+    date = mapped_column(Date, index=True)
+    minutes: Mapped[int] = mapped_column()
+    recorded_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    student: Mapped[Student] = relationship()
+    recorded_by: Mapped[User] = relationship()
+
+
 class CalendarEvent(Base):
     __tablename__ = "calendar_events"
     __table_args__ = (Index("ix_calendar_events_date", "date"),)
